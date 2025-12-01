@@ -3,6 +3,9 @@ const CACHE_NAME = 'hybrid-sa-n31-v1';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
+  './manifest.webmanifest',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
   // Leaflet assets from CDN
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
@@ -46,7 +49,6 @@ self.addEventListener('fetch', event => {
 
       return fetch(request)
         .then(networkResponse => {
-          // Cache dynamically only same-origin or known assets
           return caches.open(CACHE_NAME).then(cache => {
             try {
               cache.put(request, networkResponse.clone());
@@ -58,7 +60,6 @@ self.addEventListener('fetch', event => {
           });
         })
         .catch(() => {
-          // Optional: mund të kthesh një faqe fallback offline këtu
           return cachedResponse || new Response(
             'Offline – this resource is not cached yet.',
             { status: 503, statusText: 'Service Unavailable' }
@@ -67,3 +68,4 @@ self.addEventListener('fetch', event => {
     })
   );
 });
+
