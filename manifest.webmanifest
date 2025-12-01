@@ -1,0 +1,21 @@
+{
+  "name": "Hybrid Greedy + SA N31 Route Optimizer",
+  "short_name": "Hybrid SA N31",
+  "description": "Web-based Hybrid Greedy + Simulated Annealing route optimizer with OSM map, designed for mobile benchmarking.",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

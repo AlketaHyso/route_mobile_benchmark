@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hybrid Greedy + SA Route Optimizer (with OSM Map)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+
+
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  margin: 10px;
+}
+#map {
+  width: 100%;
+  height: 400px;
+  margin-top: 15px;
+  border: 1px solid #ccc;
+}
+button {
+  padding: 10px 15px;
+  font-size: 16px;
+}
+pre {
+  font-size: 13px;
+  white-space: pre-wrap;
+  background: #f5f5f5;
+  padding: 8px;
+  border-radius: 4px;
+  max-height: 350px;
+  overflow-y: auto;
+}
+#deviceInfo {
+  font-size: 13px;
+  color: #444;
+  margin-bottom: 8px;
+}
+</style>
+</head>
+
+<body>
+
+<h2>Hybrid Greedy + SA - N31 Route Optimization </h2>
+<p id="deviceInfo"></p>
+
+<button id="runBtn">Run Benchmark</button>
+<button id="resetBtn" style="margin-left:10px;">Restart</button>
+<span id="status"></span>
+
+<h3>Initial locations</h3>
+<pre id="initialL3"></pre>
+
+<h3>Output (runs and metrics)</h3>
+<pre id="output"></pre>
+
+<h3>Best route (visit order, by names)</h3>
+<pre id="routeNames"></pre>
+
+<h3>Optimized Route on Map</h3>
+<div id="map"></div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+/* ========== 0. Parametrat kryesore ========== */
+
+const SA_TEMPERATURE = 5000;
+const SA_COOLING_RATE = 0.996;
+const SA_LOG_EVERY = 100;
+const DEFAULT_N_RUNS = 30;
+
+/* ========== 1. Lista e pikave (L3) ========== */
+
+const L3 = [
+  ["Kalaja", [41.3275, 19.8189]],
+  ["Muzeu Historik", [41.3305, 19.8189]],
+  ["Parku i Qytetit", [41.3161, 19.8271]],
+  ["Teatri Kombëtar", [41.3270, 19.8198]],
+  ["Sheshi Kryesor", [41.3280, 19.8200]],
+  ["Katedralja", [41.3285, 19.8208]],
+  ["Pazari i Ri", [41.3308, 19.8223]],
+  ["Stadiumi Air Albania", [41.3191, 19.8167]],
+  ["Biblioteka Qendrore", [41.3278, 19.8197]],
+  ["Galeria e Arteve", [41.3279, 19.8195]],
+  ["Tregu Tradicional", [41.3282, 19.8215]],
+  ["Ura e Vjetër", [41.3260, 19.8140]],
+  ["Amfiteatri", [41.3290, 19.8230]],
+  ["Kopshti Botanik", [41.3220, 19.8280]],
+  ["Liqeni Artificial", [41.3150, 19.8240]],
+  ["Qendra Tregtare", [41.3310, 19.8205]],
+  ["Xhamia e Vjetër", [41.3295, 19.8190]],
+  ["Kisha Mesjetare", [41.3288, 19.8185]],
+  ["Monumenti i Lirisë", [41.3272, 19.8210]],
+  ["Tregu i Vjetër", [41.3300, 19.8235]],
+  ["Muzeu i Artit", [41.3265, 19.8202]],
+  ["Shtëpia e Pavarësisë", [41.3258, 19.8197]],
+  ["Kampi Veror", [41.3215, 19.8260]],
+  ["Parku i Shpendëve", [41.3195, 19.8290]],
+  ["Kështjella Romake", [41.3277, 19.8178]],
+  ["Galeria Moderne", [41.3283, 19.8204]],
+  ["Kinema Historike", [41.3298, 19.8212]],
+  ["Qyteti i Vjetër", [41.3270, 19.8225]],
+  ["Burimi Natyror", [41.3230, 19.8255]],
+  ["Shkolla e Parë", [41.3262, 19.8194]],
+  ["Ujëvara", [41.3187, 19.8132]]
+];
+
+const numPoints = L3.length;
+const names = L3.map(p => p[0]);
+const coords = L3.map(p => p[1]);
+
+/* ========== 2. Haversine ========== */
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const p = Math.PI / 180;
+  const dphi = (lat2 - lat1) * p;
+  const dl = (lon2 - lon1) * p;
+  const a = Math.sin(dphi/2)**2 +
+            Math.cos(lat1*p)*Math.cos(lat2*p)*Math.sin(dl/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// matrica e distancave
+const D = Array.from({length:numPoints},()=>Array(numPoints).fill(0));
+for(let i=0;i<numPoints;i++){
+  for(let j=0;j<numPoints;j++){
+    if(i!==j){
+      const [lat1,lon1]=coords[i];
+      const [lat2,lon2]=coords[j];
+      D[i][j]=haversine(lat1,lon1,lat2,lon2);
+    }
+  }
+}
+
+function cost(a,b){ return D[a][b]; }
+
+function routeCost(route){
+  let s=0;
+  for(let i=0;i<route.length;i++){
+    s+=cost(route[i],route[(i+1)%route.length]);
+  }
+  return s;
+}
+
+/* ========== 3. Greedy Init ========== */
+
+function greedy(start=0){
+  const unvis=new Set([...Array(numPoints).keys()]);
+  const route=[start];
+  unvis.delete(start);
+  let cur=start;
+  while(unvis.size){
+    let best=null,bc=Infinity;
+    for(const j of unvis){
+      let c=cost(cur,j);
+      if(c<bc){ bc=c; best=j; }
+    }
+    route.push(best);
+    unvis.delete(best);
+    cur=best;
+  }
+  return route;
+}
+
+/* ========== 4. RNG i fiksuar për seed ========== */
+
+function mulberry32(a){
+  return function(){
+    let t=a+=0x6D2B79F5;
+    t=Math.imul(t^(t>>>15),t|1);
+    t^=t+Math.imul(t^(t>>>7),t|61);
+    return ((t^(t>>>14))>>>0)/4294967296;
+  }
+}
+
+/* ========== 5. Hybrid Greedy + SA ========== */
+
+function hybridSA(seed){
+  const rng = mulberry32(seed);
+
+  let route = greedy(0);
+  let best = route.slice();
+  let bestDist = routeCost(best);
+
+  let T = SA_TEMPERATURE;
+
+  while(T>1){
+    let nr = route.slice();
+    let i = Math.floor(rng()*numPoints);
+    let j = Math.floor(rng()*numPoints);
+    if(i>j) [i,j]=[j,i];
+    let seg = nr.slice(i,j).reverse();
+    nr.splice(i, j-i, ...seg);
+
+    const cd = routeCost(route);
+    const nd = routeCost(nr);
+
+    if(nd<cd || rng() < Math.exp((cd-nd)/T)){
+      route = nr;
+      if(nd < bestDist){
+        best = nr;
+        bestDist = nd;
+      }
+    }
+    T *= SA_COOLING_RATE;
+  }
+
+  return {best, bestDist};
+}
+
+/* ========== 6. Multi-run ========== */
+
+function multiRun(logFn){
+  let best=null, bestD=Infinity;
+  for(let r=0;r<DEFAULT_N_RUNS;r++){
+    const seed = 2025+r;
+    const {best:br, bestDist:bd} = hybridSA(seed);
+    logFn(`Run ${r+1}/${DEFAULT_N_RUNS} | Best = ${bd.toFixed(2)} m`);
+    if(bd < bestD){ bestD=bd; best=br.slice(); }
+  }
+  return {best,bestD};
+}
+
+/* ========== 7. Leaflet Map Setup ========== */
+
+let map = L.map('map').setView([41.327, 19.82], 15);
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "© OpenStreetMap"
+}).addTo(map);
+
+let routeLayer = null;
+
+/* ========== 8. Vizatim i rrugës në hartë (me numra) ========== */
+
+function drawRouteOnMap(route){
+  if(routeLayer) map.removeLayer(routeLayer);
+
+  // Polyline me kthim në fillim (për mbylljen e turit)
+  const latlngs = route.map(i => coords[i]);
+  latlngs.push(latlngs[0]);
+
+  routeLayer = L.polyline(latlngs, {color:"red", weight:3}).addTo(map);
+
+  // Marker-at dhe etiketat vetëm për 31 pikat reale të turit
+  route.forEach((idx, k) => {
+    const p = coords[idx];
+    L.circleMarker(p, {radius:4, color:"blue"}).addTo(map)
+      .bindTooltip(String(k + 1), {permanent:true, direction:"right"});
+  });
+
+  map.fitBounds(routeLayer.getBounds(), {padding:[30,30]});
+}
+
+
+/* ========== 9. Inicializim i device info & listes L3 ========== */
+
+(function initUI(){
+  const deviceInfoEl = document.getElementById("deviceInfo");
+  const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if(isMobile){
+    deviceInfoEl.textContent = "Detected device: Mobile browser – runtime is measured directly on this phone.";
+  } else {
+    deviceInfoEl.textContent = "Detected device: Desktop/Laptop browser – runtime is measured on this computer.";
+  }
+
+  const initialPre = document.getElementById("initialL3");
+  let lines = [];
+  for(let i=0;i<numPoints;i++){
+    const [lat,lon] = coords[i];
+    lines.push(
+      `${i+1}. ${names[i]}  (lat=${lat.toFixed(4)}, lon=${lon.toFixed(4)})`
+    );
+  }
+  initialPre.textContent = lines.join("\n");
+})();
+
+/* ========== 10. MAIN (butoni) ========== */
+
+document.getElementById("runBtn").onclick = function(){
+  const out=document.getElementById("output");
+  const status=document.getElementById("status");
+  const routeNamesPre = document.getElementById("routeNames");
+
+  out.textContent="";
+  routeNamesPre.textContent="";
+  status.textContent=" Running...";
+
+  const start = performance.now();
+
+  const {best, bestD} = multiRun(line => {
+    out.textContent += line+"\n";
+  });
+
+  const total = ((performance.now()-start)/1000).toFixed(3);
+
+  out.textContent += "\n=== BEST ROUTE (indices) ===\n";
+  out.textContent += JSON.stringify(best)+"\n";
+  out.textContent += "Distance: "+bestD.toFixed(2)+" m   ("+(bestD/1000).toFixed(3)+" km)\n";
+  out.textContent += "\n⏱ Total runtime on this device (browser): "+total+" seconds\n";
+
+  // Shfaq rrugën me emra sipas rendit
+  let routeLines = [];
+  best.forEach((idx,k)=>{
+    routeLines.push(`${k+1}. ${names[idx]}`);
+  });
+  routeLines.push(`Return to start: ${names[best[0]]}`);
+  routeNamesPre.textContent = routeLines.join("\n");
+
+  drawRouteOnMap(best);
+
+  status.textContent=" Done.";
+};
+document.getElementById("resetBtn").onclick = function () {
+
+  // pastro tekstet
+  document.getElementById("output").textContent = "";
+  document.getElementById("routeNames").textContent = "";
+  document.getElementById("status").textContent = "";
+
+  // rikthe tekstin fillestar të L3
+  const initialPre = document.getElementById("initialL3");
+  let lines = [];
+  for(let i=0;i<numPoints;i++){
+    const [lat,lon] = coords[i];
+    lines.push(
+      `${i+1}. ${names[i]}  (lat=${lat.toFixed(4)}, lon=${lon.toFixed(4)})`
+    );
+  }
+  initialPre.textContent = lines.join("\n");
+
+  // pastro hartën
+  if(routeLayer){
+    map.removeLayer(routeLayer);
+    routeLayer = null;
+  }
+
+  // pastro të gjithë marker-at (pikat)
+  map.eachLayer(function(layer){
+    // lëre OSM tile layer pa u prekur
+    if(layer instanceof L.CircleMarker){
+      map.removeLayer(layer);
+    }
+  });
+
+  // rikthe zoom dhe qendrën te Tirana
+  map.setView([41.327, 19.82], 15);
+
+  // bëje butonin RUN të përdorshëm
+  document.getElementById("runBtn").disabled = false;
+
+  alert("Interface restarted. Ready for a new benchmark!");
+};
+</script>
+<script>
+// Register service worker for PWA
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('service-worker.js')
+      .then(reg => {
+        console.log('Service worker registered:', reg.scope);
+      })
+      .catch(err => {
+        console.log('Service worker registration failed:', err);
+      });
+  });
+}
+</script>
+
+</body>
+</html>
